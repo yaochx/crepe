@@ -4,6 +4,10 @@ from __future__ import print_function
 import os
 import re
 import sys
+import tensorflow as tf
+from tensorflow.keras.layers import Input, Reshape, Conv2D, BatchNormalization
+from tensorflow.keras.layers import MaxPool2D, Dropout, Permute, Flatten, Dense
+from tensorflow.keras.models import Model
 
 from scipy.io import wavfile
 import numpy as np
@@ -21,6 +25,9 @@ models = {
 # the model is trained on 16kHz audio
 model_srate = 16000
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+# print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+# tf.debugging.set_log_device_placement(True)
 
 def build_and_load_model(model_capacity):
     """
@@ -41,10 +48,6 @@ def build_and_load_model(model_capacity):
     model : tensorflow.keras.models.Model
         The pre-trained keras model loaded in memory
     """
-    from tensorflow.keras.layers import Input, Reshape, Conv2D, BatchNormalization
-    from tensorflow.keras.layers import MaxPool2D, Dropout, Permute, Flatten, Dense
-    from tensorflow.keras.models import Model
-
     if models[model_capacity] is None:
         capacity_multiplier = {
             'tiny': 4, 'small': 8, 'medium': 16, 'large': 24, 'full': 32
@@ -182,8 +185,11 @@ def get_activation(audio, sr, model_capacity='full', center=True, step_size=10,
     activation : np.ndarray [shape=(T, 360)]
         The raw activation matrix
     """
+    pred = np.array([])
     model = build_and_load_model(model_capacity)
 
+    import time
+    t1 = time.time()
     if len(audio.shape) == 2:
         audio = audio.mean(1)  # make mono
     audio = audio.astype(np.float32)
@@ -206,10 +212,15 @@ def get_activation(audio, sr, model_capacity='full', center=True, step_size=10,
 
     # normalize each frame -- this is expected by the model
     frames -= np.mean(frames, axis=1)[:, np.newaxis]
-    frames /= np.std(frames, axis=1)[:, np.newaxis]
+    frames /= (np.std(frames, axis=1)[:, np.newaxis] + 1e-16)
 
     # run prediction and convert the frequency bin weights to Hz
-    return model.predict(frames, verbose=verbose)
+    with tf.device(tf.DeviceSpec(device_type="GPU", device_index=0)):
+        pred = model.predict(frames, verbose=verbose)
+    t2 = time.time()
+    print(t2 - t1)
+
+    return pred
 
 
 def predict(audio, sr, model_capacity='full',
